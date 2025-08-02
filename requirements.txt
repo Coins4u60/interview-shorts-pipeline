@@ -1,9 +1,6 @@
-pydub==0.25.1          # поиск пауз в аудио
-mutagen==1.47.0        # длина mp3
-whisper-timestamped    # ASR (локальный Whisper)
-httpx==0.26.0          # скачивание фонов
-Pillow==10.4.0         # масштабирование картинок
-tqdm==4.67.1
+httpx==0.26.0
+mutagen==1.47.0
+Pillow==10.4.0
 google-api-python-client==2.126.0
 google-auth-oauthlib==1.2.0
-python-dotenv==1.0.1
+tqdm==4.67.1
