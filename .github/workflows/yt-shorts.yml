@@ -1,0 +1,41 @@
+name: Interview → Shorts pipeline
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/yt-shorts.yml"
+      - "requirements.txt"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (+ FFmpeg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install -r requirements.txt
+
+      - name: ✂️ Cut highlights
+        run: python scripts/cut_highlights.py
+
+      - name: 🎞️ Build video
+        run: python scripts/build_video.py
+
+      - name: 📤 Upload to YouTube
+        run: python scripts/upload_youtube.py
