@@ -1,0 +1,34 @@
+name: interview-shorts
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 5,16 * * *'   # МСК 08:30 и 19:30
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with: {python-version: '3.11'}
+
+    - name: Install deps
+      run: |
+        pip install -r requirements.txt
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: Cut highlights
+      run: python scripts/cut_highlights.py
+
+    - name: Build shorts
+      run: python scripts/build_video.py
+
+    - name: Upload to YouTube
+      run: python scripts/upload_youtube.py
