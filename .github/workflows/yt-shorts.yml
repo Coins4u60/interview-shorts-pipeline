@@ -22,10 +22,31 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
 
-      - name: Install deps (+FFmpeg)
-        run: |
-          sudo apt-get update -y && sudo apt-get install -y ffmpeg
-          pip install -r requirements.txt
+      # ---------------- Install deps (+FFmpeg) ----------------
+- name: Install deps (+FFmpeg)
+  run: |
+    sudo apt-get update -y
+    sudo apt-get install -y ffmpeg
+
+    # фиксируем/обновляем pip
+    python -m pip install --upgrade pip
+
+    # ⬇️ УБЕДИТЕСЬ, что requirements.txt уже **НЕ** содержит yt-dlp==2024.7.4
+    #    либо замените её на 2024.06.12, либо оставьте просто `yt-dlp`
+    pip install -r requirements.txt
+
+    # покажем, что реально поставилось
+    python - <<'PY'
+    import importlib, pkg_resources, textwrap
+    pkgs = ["openai", "yt_dlp", "pydub", "httpx", "mutagen", "Pillow"]
+    for p in pkgs:
+        try:
+            ver = importlib.metadata.version(p)
+            print(f"✅ {p:8s} {ver}")
+        except importlib.metadata.PackageNotFoundError:
+            print(f"⚠️  {p:8s} not installed")
+    PY
+# --------------------------------------------------------
 
       - name: Cut highlights → audio
         run: python scripts/cut_highlights.py
