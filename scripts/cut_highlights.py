@@ -1,81 +1,97 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Скачивает интервью, делает транскрипцию Whisper-ом и
-вырезает 4 фрагмента ≤45 с → audio/voice_1-4.mp3
+cut_highlights.py
+────────────────────────────────────────────────────────────
+1. Скачивает интервью с YouTube по ссылке INTERVIEW_URL
+2. Вытягивает лучший аудиопоток (m4a → fallback — любой bestaudio)
+3. Отдаёт в Whisper (o3 или gpt-4o-mini) и получает JSON-транскрипт
+4. Делит выпуск на N_SEGMENTS примерно одинаковой длины
+5. Каждому сегменту «обрезает» 30 с ± 10 с, кладёт в scripts/audio/voice_*.mp3
+   ─ для дальнейшей сборки шортов build_video.py
 """
 
-import os, math, tempfile, pathlib, shutil, random, time
-from typing import List, Tuple
-import yt_dlp
+# ─────────────────── Параметры — меняйте по вкусу ──────────────────
+INTERVIEW_URL = "https://www.youtube.com/watch?v=zV7lrWumc7U"
+              # замените на нужное интервью
+
+N_SEGMENTS    = 4        # «по 2 шорта в день» ⇒ 4 сегмента на 2 дня
+CLIP_SEC      = 30       # длительность фрагмента
+LEADING_SEC   = 10       # сдвигаем начало кусочка, чтобы не резало слова
+MODEL         = "whisper-1"      # или "o3"
+# ─────────────────────────────────────────────────────────────────────
+
+import os, io, json, math, shutil, subprocess, tempfile, textwrap
+from pathlib import Path
+import yt_dlp, pydub
 from pydub import AudioSegment
-from openai import OpenAI
+import openai
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-assert OPENAI_API_KEY, "Нет OPENAI_API_KEY"
-
-URL        = "https://www.youtube.com/watch?v=zV7lrWumc7U"
-N_CLIPS    = 4
-TARGET_SEC = 45
-
-WORK       = pathlib.Path(__file__).parent
-AUDIO_DIR  = WORK / "audio"
-shutil.rmtree(AUDIO_DIR, ignore_errors=True)
+AUDIO_DIR = Path(__file__).parent / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+TMP_DIR   = tempfile.TemporaryDirectory()
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = os.environ["OPENAI_API_KEY"]   #  <- даст Assert, если нет
+assert openai.api_key, "Нет OPENAI_API_KEY"
 
-# ───────────────────────── helpers ──────────────────────────
-def download_audio(url: str) -> pathlib.Path:
-    out = tempfile.NamedTemporaryFile(delete=False, suffix=".m4a").name
-    with yt_dlp.YoutubeDL({"format": "bestaudio[m4a]", "outtmpl": out,
-                           "quiet": True, "noprogress": True}) as ydl:
-        ydl.download([url])
-    return pathlib.Path(out)
+# ─ 1. Скачиваем аудио с YouTube ─────────────────────────────────────
+print("⏬ Скачиваю аудио…")
+audio_path = Path(TMP_DIR.name) / "full.m4a"
 
-def whisper_segments(path: pathlib.Path) -> List[Tuple[float,str]]:
-    with open(path, "rb") as f:
-        res = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-            response_format="verbose_json",
-            timestamp_granularities=["segment"]
-        )
-    return [(s["start"], s["text"].strip()) for s in res.segments]  # type: ignore
+YDL_OPTS = {
+    "format":       "bestaudio[ext=m4a]/bestaudio",
+    "outtmpl":      str(audio_path),
+    "quiet":        True,
+    "no_warnings":  True,
+}
+with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+    ydl.download([INTERVIEW_URL])
 
-def group_segments(segs, n=N_CLIPS, limit=TARGET_SEC):
-    clips, buf, buf_t, start = [], [], 0.0, 0.0
-    for t, txt in segs:
-        if buf and t - start > limit:
-            clips.append((start, buf_t, " ".join(buf)))
-            buf, buf_t = [], 0.0
-        if not buf:
-            start = t
-        buf.append(txt)
-        buf_t = t - start + 5
-        if len(clips) == n:
-            break
-    if buf and len(clips) < n:
-        clips.append((start, buf_t, " ".join(buf)))
-    return clips[:n]
+# Если попался webm/opus — конвертируем в m4a (Whisper примет любой, но m4a проще)
+if audio_path.suffix != ".m4a":
+    src = audio_path
+    audio_path = audio_path.with_suffix(".m4a")
+    subprocess.run(["ffmpeg", "-y", "-i", str(src), str(audio_path)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-def export(src: pathlib.Path, num: int, start: float, length: float):
-    dst = AUDIO_DIR / f"voice_{num}.mp3"
-    (
-        AudioSegment.from_file(src)
-        .set_channels(1)[start*1000:(start+length)*1000]
-        .export(dst, format="mp3", bitrate="128k")
+print(f"✅ Аудио: {audio_path.name} {audio_path.stat().st_size/1e6:.1f} MB")
+
+# ─ 2. Отправляем в Whisper и получаем сегменты ─────────────────────
+print("📝 Расшифровка Whisper… (может занять несколько минут)")
+with audio_path.open("rb") as f:
+    resp = openai.audio.transcriptions.create(
+        model=MODEL,
+        file=f,
+        response_format="verbose_json",
+        timestamp_granularities=["segment"],
+        language="ru"          # понадобится, если интервью русское
     )
+segments = resp.segments
+duration = resp.duration   # float, сек
 
-# ───────────────────────── main ─────────────────────────────
-def main():
-    m4a = download_audio(URL)
-    print("✅ скачано", m4a)
-    segs = whisper_segments(m4a)
-    clips = group_segments(segs)
-    for i, (st, ln, txt) in enumerate(clips, 1):
-        export(m4a, i, st, ln)
-        print(f"🎤 voice_{i}.mp3  {ln:.1f}s  {txt[:60]}…")
-    pathlib.Path(m4a).unlink(missing_ok=True)
+print(f"   Интервью длится {duration/60:.1f} мин, всего сегментов Whisper: {len(segments)}")
 
-if __name__ == "__main__":
-    main()
+# ─ 3. Выбираем N_SEGMENTS точек равноотстоящих по времени ──────────
+step = duration / N_SEGMENTS
+targets = [step/2 + i*step for i in range(N_SEGMENTS)]   # t≈ ¼, ¾ …
+
+def nearest_segment(time_sec: float):
+    return min(segments, key=lambda s: abs(s["start"] - time_sec))
+
+highlights = []
+for t in targets:
+    seg = nearest_segment(t)
+    clip_start = max(0, seg["start"] - LEADING_SEC)
+    highlights.append((clip_start, clip_start + CLIP_SEC))
+
+# ─ 4. Нарезаем MP3 файлы ────────────────────────────────────────────
+sound = AudioSegment.from_file(audio_path)
+
+for i, (start, end) in enumerate(highlights, 1):
+    clip = sound[start*1000 : end*1000]      # pydub — миллисекунды
+    out = AUDIO_DIR / f"voice_{i}.mp3"
+    clip.export(out, format="mp3", bitrate="192k")
+    print(f"🎧 voice_{i}.mp3  [{start:>6.1f} – {end:>6.1f} с]")
+
+print("\n✅  Готово. Аудио-кусочки лежат в  scripts/audio/ .")
+TMP_DIR.cleanup()
