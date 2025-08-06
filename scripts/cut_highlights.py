@@ -26,6 +26,15 @@ ROOT = Path(__file__).parent
 AUDIO_DIR = ROOT / "audio"
 AUDIO_DIR.mkdir(exist_ok=True)
 TMP = tempfile.TemporaryDirectory(prefix="yt_")
+@@
+ def download_audio(url: str) -> Path:
++    # DEBUG: убедимся, что куки действительно есть
++    ck = os.environ.get("YT_COOKIES")
++    print("▶️  YT_COOKIES length:", len(ck or "0"))
++
+     with tempfile.NamedTemporaryFile("w+", suffix=".txt") as f:
+         f.write(os.environ["YT_COOKIES"])
+         f.flush()
 
 def download_audio(url: str) -> Path:
     """Скачиваем m4a (или лучшее аудио) в TMP и возвращаем путь."""
