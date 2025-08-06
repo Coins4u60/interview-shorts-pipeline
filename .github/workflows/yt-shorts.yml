@@ -2,14 +2,15 @@ name: YouTube Shorts
 
 on:
   schedule:
-    # 05:30 / 16:30 UTC → 08:30 / 19:30 МСК
-    - cron: '30 5 * * *'
+    # 05 :30 / 16 :30 UTC → 08 :30 / 19 :30 МСК
+    - cron: '30 5  * * *'
     - cron: '30 16 * * *'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       OPENAI_API_KEY:   ${{ secrets.OPENAI_API_KEY }}
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
@@ -30,11 +31,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           python - <<'PY'
-          import importlib.metadata as m, textwrap, sys
-          for p in ("yt_dlp","openai","pydub","httpx","Pillow"):
-              try: print("✅", p, m.version(p))
-              except m.PackageNotFoundError: print("⚠️ missing", p, file=sys.stderr)
+          import importlib.metadata as m, sys
+          for pkg in ("yt_dlp", "openai", "pydub", "httpx", "Pillow"):
+              try: print("✅", pkg, m.version(pkg))
+              except m.PackageNotFoundError: print("❌", pkg, "not installed", file=sys.stderr)
           PY
+
+      # <─── НОВЫЙ ШАГ ────────────────────────────────────────>
+      - name: Write cookies.txt for yt-dlp
+        run: |
+          echo "$YT_COOKIES" > cookies.txt
+          echo "cookies.txt saved ($(wc -c < cookies.txt) bytes)"
+      # ────────────────────────────────────────────────────────>
 
       - name: Cut highlights → audio
         run: python scripts/cut_highlights.py
