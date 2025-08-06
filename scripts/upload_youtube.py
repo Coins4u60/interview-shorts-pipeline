@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Загружает ≤2 новых *.mp4 из scripts/videos/ как Shorts.
+Загружает все *.mp4 из scripts/videos/ как Shorts
+(privacyStatus = public).
 """
 
 import os, pathlib, time, sys
-from google.oauth2.credentials import Credentials
+import google.auth.transport.requests as tr
 from googleapiclient.discovery import build
 from googleapiclient.http      import MediaFileUpload
 from googleapiclient.errors    import HttpError
-import google.auth.transport.requests as tr
+from google.oauth2.credentials import Credentials
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-MAX_UPLOADS_PER_RUN = 2          # 2 ролика за запуск
+HASHTAGS = "#финансы #инвестиции #shorts #money #finance"
 
 creds = Credentials(
     None,
@@ -25,30 +26,29 @@ creds = Credentials(
 creds.refresh(tr.Request())
 yt = build("youtube", "v3", credentials=creds, cache_discovery=False)
 
-HASHTAGS = "#финансы #деньги #инвестиции #личныефинансы #shorts"
-TAGS = ["финансы","деньги","финансовая грамотность","инвестиции",
-        "money","finance","budget","shorts"]
-
 VIDEOS = sorted((pathlib.Path(__file__).parent / "videos").glob("voice_*.mp4"))
 if not VIDEOS:
-    sys.exit("❌ Нет mp4 в scripts/videos")
+    sys.exit("Нет mp4 для загрузки")
 
-for vid in VIDEOS[:MAX_UPLOADS_PER_RUN]:
+for vid in VIDEOS:
     idx = vid.stem.split('_')[-1]
     body = {
         "snippet": {
-            "title": f"Short #{idx} • Личный бюджет за 1 минуту",
-            "description": "Советы по управлению деньгами\n\n" + HASHTAGS,
+            "title": f"Short #{idx} • Лучшие мысли из интервью",
+            "description": f"Короткий фрагмент интервью.\n\n{HASHTAGS}",
             "categoryId": "22",
-            "tags": TAGS
+            "tags": ["финансы","инвестиции","личные финансы","shorts","money","finance"],
         },
         "status": {"privacyStatus": "public"}
     }
-    media = MediaFileUpload(vid, mimetype="video/mp4", resumable=True)
     try:
-        resp = yt.videos().insert(part="snippet,status",
-                                  body=body, media_body=media).execute()
-        print(f"📤 https://youtu.be/{resp['id']}  ← {vid.name}")
+        req = yt.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=MediaFileUpload(vid, mimetype="video/mp4", resumable=True)
+        )
+        resp = req.execute()
+        print("📤", f"https://youtu.be/{resp['id']}")
     except HttpError as e:
-        print("❌ Upload error:", e, file=sys.stderr)
+        print("Upload error:", e)
         time.sleep(20)
