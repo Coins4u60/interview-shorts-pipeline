@@ -1,10 +1,10 @@
-name: YouTube Shorts (interview pipeline)
+name: YouTube Shorts
 
 on:
   schedule:
-    # 08:30 и 19:30 МСК ≈ 05:30 / 16:30 UTC
-    - cron: "30 5  * * *"
-    - cron: "30 16 * * *"
+    # 05:30 / 16:30 UTC → 08:30 / 19:30 МСК
+    - cron: '30 5 * * *'
+    - cron: '30 16 * * *'
   workflow_dispatch:
 
 jobs:
@@ -15,30 +15,25 @@ jobs:
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      YT_COOKIES:       ${{ secrets.YT_COOKIES }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Install deps (+ FFmpeg)
+      - name: Install deps (+FFmpeg)
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-          # покажем, что реально поставилось
           python - <<'PY'
-          import importlib.metadata as m
-          for pkg in ["openai","yt_dlp","pydub","httpx","mutagen","Pillow"]:
-              try:
-                  print(f"✅ {pkg:8s}", m.version(pkg))
-              except m.PackageNotFoundError:
-                  print(f"⚠️  {pkg:8s} not installed")
+          import importlib.metadata as m, textwrap, sys
+          for p in ("yt_dlp","openai","pydub","httpx","Pillow"):
+              try: print("✅", p, m.version(p))
+              except m.PackageNotFoundError: print("⚠️ missing", p, file=sys.stderr)
           PY
 
       - name: Cut highlights → audio
