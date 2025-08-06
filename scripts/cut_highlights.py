@@ -1,3 +1,20 @@
+import urllib.request, json, os, tempfile, subprocess, shlex, sys
+
+def cookies_ok() -> bool:
+    with tempfile.NamedTemporaryFile("w+", suffix=".txt") as f:
+        f.write(os.environ["YT_COOKIES"]); f.flush()
+        # маленький запрос к ytsearch, вернёт JSON только если куки валидны
+        cmd = ["yt-dlp", "--cookies", f.name,
+               "-j", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=15)
+            json.loads(out)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+if not cookies_ok():
+    sys.exit("❌  YT_COOKIES invalid – обновите секрет")
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
