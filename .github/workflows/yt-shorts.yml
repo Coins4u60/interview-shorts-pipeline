@@ -19,37 +19,26 @@ jobs:
       YT_COOKIES:       ${{ secrets.YT_COOKIES }}   # многострочный секрет
 
     steps:
-      - uses: actions/checkout@v4
+  - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+  - uses: actions/setup-python@v5
+    with: {python-version: '3.11'}
 
-      # ------------------------------------------------------------
-      - name: Install deps (+FFmpeg)
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg
-          python -m pip install -U pip
-          pip install -r requirements.txt
-          python - <<'PY'
-          import importlib.metadata as m, sys
-          for p in ("yt_dlp", "openai", "pydub", "httpx",
-                    "mutagen", "Pillow"):
-              try:
-                  print("✅", p, m.version(p))
-              except m.PackageNotFoundError:
-                  print("⚠️  missing", p, file=sys.stderr)
-          PY
-      # ------------------------------------------------------------
-      - name: Write cookies.txt for yt-dlp
-        if: env.YT_COOKIES != ''
-        run: |
-          printf '%s\n' "$YT_COOKIES" > cookies.txt
-          echo "cookies.txt saved ($(wc -c < cookies.txt) bytes)"
-      # ------------------------------------------------------------
-      - name: Cut highlights → audio
-        run: python scripts/cut_highlights.py
+  # ⬇️ раскодируем куки
+  - name: Write cookies.txt for yt-dlp
+    run: |
+      echo "$YT_COOKIES_B64" | base64 -d > cookies.txt
+      echo 'cookies.txt written:'
+      cat -A cookies.txt | head
+    env:
+      YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+
+  # ---------------------------------------------
+  - name: Install deps (+FFmpeg)
+    …
+
+  - name: Cut highlights → audio
+    run: python scripts/cut_highlights.py
       # ------------------------------------------------------------
       - name: Build video (FFmpeg)
         run: python scripts/build_video.py
