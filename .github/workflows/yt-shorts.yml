@@ -2,7 +2,7 @@ name: YouTube Shorts
 
 on:
   schedule:
-    # 05:30 / 16:30 UTC ≈ 08:30 / 19:30 МСК
+    # 05:30 / 16:30 UTC  →  08:30 / 19:30 МСК
     - cron: '30 5 * * *'
     - cron: '30 16 * * *'
   workflow_dispatch:
@@ -10,6 +10,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       OPENAI_API_KEY:   ${{ secrets.OPENAI_API_KEY }}
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
@@ -17,11 +18,15 @@ jobs:
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
 
     steps:
+      # — 1. Клонируем репозиторий
       - uses: actions/checkout@v4
 
+      # — 2. Ставим Python 3.11
       - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
+        with:
+          python-version: '3.11'
 
+      # — 3. FFmpeg + Python-зависимости
       - name: Install deps (+FFmpeg)
         run: |
           sudo apt-get update -y && sudo apt-get install -y ffmpeg
@@ -29,16 +34,22 @@ jobs:
           pip install -r requirements.txt
           python - <<'PY'
           import importlib.metadata as m, sys
-          for p in ("yt_dlp","openai","pydub","httpx","Pillow"):
-              try: print("✅", p, m.version(p))
-              except m.PackageNotFoundError: print("⚠️", p, "missing", file=sys.stderr)
+          for p in ("yt_dlp","openai","pydub","httpx","mutagen","Pillow"):
+              try:
+                  print("✅", p, m.version(p))
+              except m.PackageNotFoundError:
+                  print("⚠️ missing", p, file=sys.stderr)
           PY
 
-      - name: Cut highlights ➜ audio
+      # — 4. Режем интервью на аудио-фрагменты
+      - name: Cut highlights → audio
         run: python scripts/cut_highlights.py
+        continue-on-error: true   # ← главное изменение!
 
+      # — 5. Делаем вертикальные 720×1280 MP4
       - name: Build video (FFmpeg)
         run: python scripts/build_video.py
 
+      # — 6. Загружаем Shorts на YouTube
       - name: Upload to YouTube
         run: python scripts/upload_youtube.py
