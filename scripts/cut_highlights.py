@@ -1,117 +1,89 @@
-import urllib.request, json, os, tempfile, subprocess, shlex, sys
-
-def cookies_ok() -> bool:
-    with tempfile.NamedTemporaryFile("w+", suffix=".txt") as f:
-        f.write(os.environ["YT_COOKIES"]); f.flush()
-        # маленький запрос к ytsearch, вернёт JSON только если куки валидны
-        cmd = ["yt-dlp", "--cookies", f.name,
-               "-j", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
-        try:
-            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=15)
-            json.loads(out)
-            return True
-        except subprocess.CalledProcessError:
-            return False
-
-if not cookies_ok():
-    sys.exit("❌  YT_COOKIES invalid – обновите секрет")
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-1) скачивает интервью (audio-only m4a, fallback bestaudio)
-2) распознаёт Whisper-v3 (через openai-python)
-3) режет на N_SEGMENTS примерно одинаковой длины
-4) обрезает +10 s спереди, +CLIP_SEC сзади
-5) кладёт voice_*.mp3 в scripts/audio/   (для build_video.py)
+cut_highlights.py
+─────────────────────────────────────────────────────────────────────────────
+1.  Скачивает интервью (INTERVIEW_URL) через yt-dlp без авторизации
+2.  Отдаёт аудио в Whisper (oz или o4-mini) и получает JSON-транскрипт
+3.  Делит выпуск на N_SEGMENTS ≈ одинаковой длины
+4.  Каждому сегменту «обрезает» 30 ± 1 с аудио ⇢ scripts/audio/voice_*.mp3
 """
 
-import os, json, math, shutil, subprocess, tempfile, textwrap, io, sys, re, time
+# ───────────────────────── Настройки ───────────────────────────────────────
+INTERVIEW_URL   = "https://www.youtube.com/watch?v=zV7lrWumc7U"   # поменяйте
+N_SEGMENTS      = 4        # 4 шорта → 2 в день
+CLIP_SEC        = 30       # длительность фрагмента
+LEADING_SEC     = 10       # сдвиг, чтобы не резало слова
+MODEL           = "whisper-1"  # или "o4-mini"
+# ───────────────────────────────────────────────────────────────────────────
+
+import os, io, sys, json, math, shutil, subprocess, tempfile, textwrap
 from pathlib import Path
-import yt_dlp, httpx
+import yt_dlp, httpx, mutagen
 from pydub import AudioSegment
 import openai
 
-# ───────────────── настройки ─────────────────
-INTERVIEW_URL = "https://www.youtube.com/watch?v=zV7lrWumc7U"
-N_SEGMENTS    = 4          # 2 шорта в день × 2 дня
-CLIP_SEC      = 30         # длина шорта
-LEADING_SEC   = 10         # оставляем небольшой «разгон»
-MODEL         = "whisper-1"
-# ─────────────────────────────────────────────
+TMP = Path(tempfile.gettempdir())
+AUDIO_DIR = Path(__file__).parent / "audio"
+AUDIO_DIR.mkdir(exist_ok=True, parents=True)
 
-ROOT = Path(__file__).parent
-AUDIO_DIR = ROOT / "audio"
-AUDIO_DIR.mkdir(exist_ok=True)
-TMP = tempfile.TemporaryDirectory(prefix="yt_")
-@@
- def download_audio(url: str) -> Path:
-+    # DEBUG: убедимся, что куки действительно есть
-+    ck = os.environ.get("YT_COOKIES")
-+    print("▶️  YT_COOKIES length:", len(ck or "0"))
-+
-     with tempfile.NamedTemporaryFile("w+", suffix=".txt") as f:
-         f.write(os.environ["YT_COOKIES"])
-         f.flush()
+openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+# ---------------------------------------------------------------------------
 def download_audio(url: str) -> Path:
-    """Скачиваем m4a (или лучшее аудио) в TMP и возвращаем путь."""
-    out = str(Path(TMP.name) / "%(id)s.%(ext)s")
-
-    ytdl_opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio",
-        "outtmpl": out,
+    """
+    Скачиваем аудио только _если_ YouTube отдает ролик без авторизации.
+    Если видим ошибку «Sign-in to confirm you’re not a bot» → пропускаем выпуск.
+    """
+    out = TMP / "full.m4a"
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": str(out),
         "quiet": True,
-        "overwrite": True,
+        # ! главное – НЕ передаём cookies и не пытаемся логиниться
     }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        return out
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e)
+        if "Sign in to confirm" in msg or "cookies" in msg:
+            # YouTube не дал скачать без логина – завершаем джоб нейтрально
+            print("ℹ️  YouTube требует авторизацию – выпуск пропущен")
+            sys.exit(78)         # 78 = GitHub Actions «neutral»
+        raise                    # любая другая ошибка – падаем красным
 
-    cookies_txt = os.getenv("YT_COOKIES", "").strip()
-    if cookies_txt:
-        cfile = Path(TMP.name) / "cookies.txt"
-        cfile.write_text(cookies_txt, encoding="utf-8")
-        ytdl_opts["cookiefile"] = str(cfile)
+# ---------------------------------------------------------------------------
+def whisper_json(m4a: Path) -> list[dict]:
+    with open(m4a, "rb") as f:
+        audio = f.read()
+    resp = openai_client.audio.transcriptions.create(
+        file=(m4a.name, io.BytesIO(audio)),
+        model=MODEL,
+        response_format="verbose_json",
+    )
+    return json.loads(resp.json())["segments"]
 
-    with yt_dlp.YoutubeDL(ytdl_opts) as ydl:
-        info = ydl.extract_info(url)
-        return Path(ydl.prepare_filename(info))
+# ---------------------------------------------------------------------------
+def main():
+    full      = download_audio(INTERVIEW_URL)
+    segments  = whisper_json(full)
 
-def whisper_transcribe(wav: Path) -> list[str]:
-    """Отдаём на Whisper v3 и возвращаем JSON list [{start,end,text},…]."""
-    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    with wav.open("rb") as f:
-        resp = client.audio.transcriptions.create(
-            model=MODEL, file=f, response_format="verbose_json"
-        )
-    return resp.segments  # type: ignore
+    # Вычисляем границы, чтобы получилось N_SEGMENTS клипов ≈ CLIP_SEC
+    total_sec = mutagen.File(full).info.length
+    step      = (total_sec - LEADING_SEC) / N_SEGMENTS
+    borders   = [max(0, int(LEADING_SEC + i*step)) for i in range(N_SEGMENTS)]
 
-def main() -> None:
-    m4a = download_audio(INTERVIEW_URL)
-    wav = m4a.with_suffix(".wav")
-    subprocess.run(["ffmpeg", "-y", "-i", m4a, wav], check=True)
+    audio = AudioSegment.from_file(full)
+    for idx, start in enumerate(borders, 1):
+        clip = audio[start*1000 : (start+CLIP_SEC)*1000]
+        path = AUDIO_DIR / f"voice_{idx}.mp3"
+        clip.export(path, format="mp3", bitrate="128k")
+        print("🔊", path.name)
 
-    segments = whisper_transcribe(wav)
+    print("✅  Готово:", len(borders), "клипов")
 
-    total_dur = segments[-1]["end"]
-    chunk = total_dur / N_SEGMENTS
-
-    groups: list[list[dict]] = [[] for _ in range(N_SEGMENTS)]
-    for seg in segments:
-        idx = min(int(seg["start"] // chunk), N_SEGMENTS - 1)
-        groups[idx].append(seg)
-
-    for i, segs in enumerate(groups, 1):
-        if not segs:
-            continue
-        start = max(0, segs[0]["start"] - LEADING_SEC)
-        end   = start + CLIP_SEC
-        out_mp3 = AUDIO_DIR / f"voice_{i}.mp3"
-
-        subprocess.run([
-            "ffmpeg", "-y", "-ss", str(start), "-t", str(CLIP_SEC),
-            "-i", m4a, "-vn", "-acodec", "libmp3lame", str(out_mp3)
-        ], check=True)
-
-        text = " ".join(s["text"].strip() for s in segs)
-        print(f"TTS {i}/{N_SEGMENTS}: {text[:60]}…")
-
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     main()
