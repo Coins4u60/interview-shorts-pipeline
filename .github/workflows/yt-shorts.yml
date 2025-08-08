@@ -1,7 +1,7 @@
 name: YouTube Shorts
 
 on:
-  # запускаем каждый день 08:30 и 19:30 МСК ≈ 05:30 / 16:30 UTC
+  # каждый день 08:30 и 19:30 МСК  ≈ 05:30 / 16:30 UTC
   schedule:
     - cron: '30 5 * * *'
     - cron: '30 16 * * *'
@@ -16,32 +16,44 @@ jobs:
       YT_CLIENT_ID:     ${{ secrets.YT_CLIENT_ID }}
       YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
       YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      YT_COOKIES:       ${{ secrets.YT_COOKIES }}   # многострочный секрет
 
     steps:
-  - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-  - uses: actions/setup-python@v5
-    with: {python-version: '3.11'}
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-  # ⬇️ раскодируем куки
-  - name: Write cookies.txt for yt-dlp
-    run: |
-      echo "$YT_COOKIES_B64" | base64 -d > cookies.txt
-      echo 'cookies.txt written:'
-      cat -A cookies.txt | head
-    env:
-      YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+      # ───────────────────────────────────────────
+      # 1. Пишем cookies.txt из секрета YT_COOKIES_B64
+      - name: Write cookies.txt for yt-dlp
+        run: |
+          echo "$YT_COOKIES_B64" | base64 -d > cookies.txt
+          echo 'cookies.txt written (first 5 lines):'
+          head -n 5 cookies.txt | cat -A
+        env:
+          YT_COOKIES_B64: ${{ secrets.YT_COOKIES_B64 }}
+      # ───────────────────────────────────────────
 
-  # ---------------------------------------------
-  - name: Install deps (+FFmpeg)
-    …
+      - name: Install deps (+FFmpeg)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python - <<'PY'
+          import importlib.metadata as m, sys
+          for p in ("yt_dlp","openai","pydub","httpx","mutagen","Pillow"):
+              try: print("✅", p, m.version(p))
+              except m.PackageNotFoundError: print("⚠️ missing", p, file=sys.stderr)
+          PY
 
-  - name: Cut highlights → audio
-    run: python scripts/cut_highlights.py
-      # ------------------------------------------------------------
+      - name: Cut highlights → audio
+        run: python scripts/cut_highlights.py
+
       - name: Build video (FFmpeg)
         run: python scripts/build_video.py
-      # ------------------------------------------------------------
+
       - name: Upload to YouTube
         run: python scripts/upload_youtube.py
